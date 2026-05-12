@@ -1002,6 +1002,11 @@ async function handleCliOnly(command: string, args: string[]) {
         await runMigrateEngine(engine, args);
         break;
       }
+      case 'migrate-embedding-dimension': {
+        const { runMigrateEmbeddingDimension } = await import('./commands/migrate-embedding-dimension.ts');
+        await runMigrateEmbeddingDimension(engine, args);
+        break;
+      }
       case 'eval': {
         // v0.32 EXP-5: `eval takes-quality {run,trend,regress}` requires a
         // brain (samples takes from DB / reads runs table). `replay` was

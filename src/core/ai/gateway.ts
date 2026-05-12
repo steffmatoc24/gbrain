@@ -40,12 +40,28 @@ import { resolveModel, TIER_DEFAULTS } from '../model-config.ts';
 import type { BrainEngine } from '../engine.ts';
 import { dimsProviderOptions } from './dims.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
+import { getDimensionsForModel } from './embedding-registry.ts';
 
 const MAX_CHARS = 8000;
 const DEFAULT_EMBEDDING_MODEL = 'openai:text-embedding-3-large';
-const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 const DEFAULT_EXPANSION_MODEL = 'anthropic:claude-haiku-4-5-20251001';
 const DEFAULT_CHAT_MODEL = 'anthropic:claude-sonnet-4-6';
+
+/**
+ * Resolve embedding dimensions using explicit → registry priority.
+ * a) explicit config value wins (embedding_dimensions set directly)
+ * b) derived from the configured embedding_model via the registry
+ * c) HARD FAIL — no silent fallback to 1536
+ */
+function resolveEmbeddingDimensions(cfg: AIGatewayConfig): number {
+  if (cfg.embedding_dimensions != null) return cfg.embedding_dimensions;
+  if (cfg.embedding_model) return getDimensionsForModel(cfg.embedding_model);
+  throw new AIConfigError(
+    'embedding_dimensions is not set and cannot be derived: ' +
+    'no embedding_model is configured. ' +
+    'Set embedding_model (e.g. "mistral:mistral-embed") before init.',
+  );
+}
 
 let _config: AIGatewayConfig | null = null;
 const _modelCache = new Map<string, any>();
@@ -253,7 +269,7 @@ export function applyOpenAICompatConfig(
 export function configureGateway(config: AIGatewayConfig): void {
   _config = {
     embedding_model: config.embedding_model ?? DEFAULT_EMBEDDING_MODEL,
-    embedding_dimensions: config.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+    embedding_dimensions: resolveEmbeddingDimensions(config),
     embedding_multimodal_model: config.embedding_multimodal_model,
     expansion_model: config.expansion_model ?? DEFAULT_EXPANSION_MODEL,
     chat_model: config.chat_model ?? DEFAULT_CHAT_MODEL,
@@ -440,7 +456,7 @@ export function getEmbeddingModel(): string {
 }
 
 export function getEmbeddingDimensions(): number {
-  return requireConfig().embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  return _config!.embedding_dimensions;
 }
 
 /**
@@ -766,8 +782,8 @@ export async function embed(texts: string[]): Promise<Float32Array[]> {
   const cfg = requireConfig();
   const { model, recipe, modelId } = await resolveEmbeddingProvider(getEmbeddingModel());
   const truncated = texts.map(t => (t ?? '').slice(0, MAX_CHARS));
-  const providerOpts = dimsProviderOptions(recipe.implementation, modelId, cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS);
-  const expected = cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  const providerOpts = dimsProviderOptions(recipe.implementation, modelId, cfg.embedding_dimensions ?? getEmbeddingDimensions());
+  const expected = cfg.embedding_dimensions ?? getEmbeddingDimensions();
 
   const embedding = recipe.touchpoints?.embedding;
   const maxBatchTokens = embedding?.max_batch_tokens;
@@ -1014,7 +1030,7 @@ export async function embedMultimodal(inputs: MultimodalInput[]): Promise<Float3
     );
   }
 
-  const expected = cfg.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  const expected = cfg.embedding_dimensions ?? getEmbeddingDimensions();
   // Voyage multimodal returns 1024 dims. If the brain is configured for a
   // different `embedding` column dim (e.g. OpenAI 1536 text), the dual-column
   // schema lets text live in `embedding` (1536) and images in

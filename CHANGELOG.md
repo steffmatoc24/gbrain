@@ -2,6 +2,59 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.33.1] - 2026-05-12
+
+### BREAKING CHANGE: `gbrain init` without `--embedding-model` now aborts
+
+`gbrain init` without an `--embedding-model` flag now fails with a clear error
+instead of silently defaulting to `vector(1536)`. Existing brains that use a
+non-OpenAI embedding model (Mistral, Voyage, Cohere, Gemini, MiniMax) must
+explicitly set `embedding_model` in their config and may need to run
+`gbrain migrate-embedding-dimension` if the model's dimension differs from 1536.
+
+**Migration path for existing brains:**
+```bash
+# Check what dimension your current model uses:
+gbrain config get embedding_model
+# Then if different from 1536:
+gbrain migrate-embedding-dimension --to <correct-dimension>
+```
+
+### What's new
+
+- **`src/core/ai/embedding-registry.ts`** (new): `MODEL_DIMENSIONS` map with
+  verified dimensions for 11 models across 6 providers. `getDimensionsForModel()`
+  throws on unknown models.
+- **`src/core/ai/gateway.ts`**: Removed silent `DEFAULT_EMBEDDING_DIMENSIONS = 1536`
+  fallback. `resolveEmbeddingDimensions()` now queries the registry or errors.
+- **`src/core/schema-embedded.ts` + `src/schema.sql`**: `__EMBEDDING_DIMS__` template
+  token replaces 3 hardcoded `VECTOR(1536)` occurrences.
+- **`src/core/postgres-engine.ts`**: Regex replacement for `__EMBEDDING_DIMS__` in
+  schema initialization.
+- **`src/core/migrate.ts`**: All 3 hardcoded `VECTOR(1536)` replaced with
+  `__EMBEDDING_DIMS__`; fallback loader uses embedding registry.
+- **`src/commands/embed.ts`**: Pre-flight check via `readContentChunksEmbeddingDim()`
+  validates schema dimension before embedding.
+- **`src/commands/migrate-embedding-dimension.ts`** (new): Migrations content_chunks
+  embedding column to a new dimension with a clear error path.
+- **`src/commands/init.ts`**: Init guard aborts when no model is specified.
+
+### Verified model dimensions
+
+| Model | Dimension | Source |
+|-------|-----------|--------|
+| mistral:mistral-embed | 1024 | docs.mistral.ai (2025-05-12) |
+| openai:text-embedding-3-small | 1536 | platform.openai.com (2025-05-12) |
+| openai:text-embedding-3-large | 3072 | platform.openai.com (2025-05-12) |
+| openai:text-embedding-ada-002 | 1536 | platform.openai.com (2025-05-12) |
+| voyage:voyage-3-large | 1024 | blog.voyageai.com (2025-01-07) |
+| voyage:voyage-3 | 1024 | blog.voyageai.com (2024-09-18) |
+| voyage:voyage-3-lite | 1024 | blog.voyageai.com (2024-09-18) |
+| cohere:embed-multilingual-v3.0 | 1024 | docs.cohere.com (2025-05-12) |
+| cohere:embed-english-v3.0 | 1024 | docs.cohere.com (2025-05-12) |
+| gemini:text-embedding-004 | 768 | ai.google.dev (2025-05-12) |
+| minimax:embo-01 | 1536 | platform.minimax.io (2025-05-12) |
+
 ## [0.33.0] - 2026-05-11
 
 **`gbrain recall` now answers "what changed since last time?" in one command, and thin-client installs stop silently lying about empty results.**

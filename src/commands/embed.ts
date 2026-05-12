@@ -4,6 +4,30 @@ import type { ChunkInput } from '../core/types.ts';
 import { chunkText } from '../core/chunkers/recursive.ts';
 import { createProgress, type ProgressReporter } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import { getEmbeddingDimensions } from '../core/ai/gateway.ts';
+
+/**
+ * Pre-flight check: verify that the gateway's embedding dimension matches
+ * the DB column dimension. A mismatch causes silent pgvector INSERT failures.
+ */
+async function runEmbedPreflightCheck(engine: BrainEngine): Promise<void> {
+  const { configureGateway } = await import('../core/ai/gateway.ts');
+  const config = loadConfig();
+  configureGateway(config);
+  const gwDims = getEmbeddingDimensions();
+  const { readContentChunksEmbeddingDim } = await import('../core/embedding-dim-check.ts');
+  const colInfo = await readContentChunksEmbeddingDim(engine);
+  if (!colInfo.exists || colInfo.dims === null) return;
+  if (colInfo.dims !== gwDims) {
+    console.error(
+      `Embedding dimension mismatch:\n` +
+      `  DB column:  vector(${colInfo.dims})\n` +
+      `  Gateway:    ${gwDims}-dim vectors\n` +
+      `  Run \`gbrain migrate-embedding-dimension --to ${gwDims}\` to fix.`
+    );
+    process.exit(1);
+  }
+}
 
 export interface EmbedOpts {
   /** Embed ALL pages (every chunk). */
@@ -134,6 +158,7 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
   };
 
   try {
+    await runEmbedPreflightCheck(engine);
     const result = await runEmbedCore(engine, opts);
     if (progressStarted) progress.finish();
     return result;

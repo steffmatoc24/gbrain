@@ -54,9 +54,9 @@ export function getPostgresSchema(dims: number = 1536, model: string = 'text-emb
   }
   const sanitizedModel = escapeSqlStringLiteral(String(model));
   return applyChunkEmbeddingIndexPolicy(SCHEMA_SQL, parsedDims)
-    .replace(/vector\(1536\)/g, `vector(${parsedDims})`)
-    .replace(/'text-embedding-3-large'/g, `'${sanitizedModel}'`)
-    .replace(/\('embedding_dimensions', '1536'\)/g, `('embedding_dimensions', '${parsedDims}')`);
+    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims))
+    .replace(/__EMBEDDING_MODEL__/g, sanitizedModel)
+    .replace(/\('embedding_dimensions', '__EMBEDDING_DIMS__'\)/g, `('embedding_dimensions', '${parsedDims}')`);
 }
 
 // CONNECTION_ERROR_PATTERNS / isConnectionError were used by the per-call
