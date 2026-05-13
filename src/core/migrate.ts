@@ -1,5 +1,57 @@
 import type { BrainEngine } from './engine.ts';
 import { slugifyPath } from './sync.ts';
+import { getDimensionsForModel } from './ai/embedding-registry.ts';
+
+/**
+ * Resolve the embedding dimension for this brain.
+ *
+ * Priority: 1) config.embedding_dimensions (if a valid integer 1–4096),
+ *           2) config.embedding_model → registry lookup,
+ *           3) hard error.
+ */
+async function resolveEmbeddingDim(engine: BrainEngine): Promise<number> {
+  // 1. numeric config value
+  try {
+    const dimRows = await engine.executeRaw<{ value: string }>(
+      `SELECT value FROM config WHERE key = 'embedding_dimensions'`,
+    );
+    if (dimRows.length > 0 && dimRows[0].value !== '__EMBEDDING_DIMS__') {
+      const parsed = parseInt(dimRows[0].value, 10);
+      if (Number.isFinite(parsed) && parsed > 0 && parsed <= 4096) {
+        return parsed;
+      }
+    }
+  } catch {
+    // config table may not exist on a very fresh DB — fall through
+  }
+  // 2. model → registry
+  try {
+    const modelRows = await engine.executeRaw<{ value: string }>(
+      `SELECT value FROM config WHERE key = 'embedding_model'`,
+    );
+    if (modelRows.length > 0) {
+      return getDimensionsForModel(modelRows[0].value);
+    }
+  } catch {
+    // ditto
+  }
+  throw new Error(
+    `Cannot resolve embedding dimension: neither embedding_dimensions ` +
+    `nor embedding_model set in config. ` +
+    `Run \`gbrain init --embedding-model <model>\` first.`,
+  );
+}
+
+/**
+ * Replace every __EMBEDDING_DIMS__ token in a SQL string with the
+ * resolved integer dimension. No-op when the token is absent.
+ */
+function resolveTemplateInSQL(sql: string, dim: number): string {
+  if (!sql.includes('__EMBEDDING_DIMS__')) return sql;
+  return sql.replaceAll('__EMBEDDING_DIMS__', String(dim));
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 /**
  * Schema migrations — run automatically on initSchema().
@@ -1207,7 +1259,7 @@ export const MIGRATIONS: Migration[] = [
         resolved_unit    TEXT,
         resolved_source  TEXT,
         resolved_by      TEXT,
-        embedding        VECTOR(1536),
+        embedding        VECTOR(__EMBEDDING_DIMS__),
         embedded_at      TIMESTAMPTZ,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1269,7 +1321,7 @@ export const MIGRATIONS: Migration[] = [
           resolved_unit    TEXT,
           resolved_source  TEXT,
           resolved_by      TEXT,
-          embedding        VECTOR(1536),
+          embedding        VECTOR(__EMBEDDING_DIMS__),
           embedded_at      TIMESTAMPTZ,
           created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2210,27 +2262,10 @@ export const MIGRATIONS: Migration[] = [
     //   - consolidated_into BIGINT — takes.id is BIGSERIAL.
     sql: '',
     handler: async (engine: BrainEngine) => {
-      // Step 1: resolve embedding dim from config table (already populated
-      // by the schema-init __EMBEDDING_DIMS__ replacement on PGLite, or by
-      // the seed config on Postgres). Default to 1536 (OpenAI text-embed-3-large).
-      let embeddingDim = 1536;
-      try {
-        const dimRows = await engine.executeRaw<{ value: string }>(
-          `SELECT value FROM config WHERE key = 'embedding_dimensions'`,
-        );
-        if (dimRows.length > 0) {
-          const parsed = parseInt(dimRows[0].value, 10);
-          if (Number.isFinite(parsed) && parsed > 0 && parsed <= 4096) {
-            embeddingDim = parsed;
-          }
-        }
-      } catch {
-        // No config row yet — fall back to default. Fresh installs hit this
-        // path on first initSchema; that's fine since the schema seeds
-        // the row before subsequent migrations run.
-      }
+      // Resolve embedding dim from config (embedding_dimensions or embedding_model → registry).
+      const embeddingDim = await resolveEmbeddingDim(engine);
 
-      // Step 2: pgvector version preflight for HALFVEC support (>=0.7).
+      // pgvector version preflight for HALFVEC support (>=0.7).
       // PGLite ships a recent pgvector inside its WASM bundle; we still
       // probe to be honest about the column type.
       let useHalfvec = false;
@@ -2926,6 +2961,9 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   // Pre-flight: warn about connections that might block DDL
   await checkForBlockingConnections(engine);
 
+  // Resolve embedding dimension once — used for all __EMBEDDING_DIMS__ tokens
+  const embeddingDim = await resolveEmbeddingDim(engine);
+
   let applied = 0;
   for (const m of pending) {
     console.log(`  [${m.version}] ${m.name}...`);
@@ -2937,7 +2975,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
       try {
         // v0.30.1: retry wrapper handles statement_timeout + conn-reset
         // across 3 attempts (5s/15s/45s). Other errors throw immediately.
-        await runMigrationSQLWithRetry(engine, m, sql);
+        await runMigrationSQLWithRetry(engine, m, resolveTemplateInSQL(sql, embeddingDim));
       } catch (err: unknown) {
         // Actionable diagnostics for statement timeout (Postgres error 57014).
         // Shape matches the 4-part error standard (what / why / fix / verify).
@@ -2986,7 +3024,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
         const idempotent = isMigrationIdempotent(m);
         if (idempotent) {
           console.warn(`  [${m.version}] ⚠️  verify failed; re-running idempotent migration once`);
-          if (sql) await runMigrationSQLWithRetry(engine, m, sql);
+          if (sql) await runMigrationSQLWithRetry(engine, m, resolveTemplateInSQL(sql, embeddingDim));
           if (m.handler) await m.handler(engine);
           // Best-effort: don't double-throw if second run still fails verify.
           // Operator's next run of doctor will re-detect drift.

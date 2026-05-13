@@ -64,6 +64,21 @@ export async function runInit(args: string[]) {
     chatModelIdx !== -1 ? args[chatModelIdx + 1] : null,
   );
 
+  // Guard: embedding_model is mandatory. Without it the gateway cannot derive
+  // dimensions and would either throw a confusing "unknown model" error or (pre-
+  // v0.33) silently use the OpenAI 1536 default — both are wrong.
+  if (!aiOpts.embedding_model && !isMigrateOnly) {
+    console.error(
+      `No embedding model specified. Choose one of:\n` +
+      `  gbrain init --embedding-model mistral:mistral-embed   # Mistral (EU-hosted, 1024 dim)\n` +
+      `  gbrain init --embedding-model openai:text-embedding-3-large   # OpenAI (1536 dim)\n` +
+      `  gbrain init --model mistral   # picks default Mistral model\n` +
+      `  gbrain init --model openai    # picks default OpenAI model\n` +
+      `\nRun \`gbrain providers list\` to see all available providers.`
+    );
+    process.exit(1);
+  }
+
   // Schema-only path: apply initSchema against the already-configured engine
   // without ever calling saveConfig. Used by apply-migrations, the stopgap
   // script, and the postinstall hook. Bare `gbrain init` defaults to PGLite

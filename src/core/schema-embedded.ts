@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS content_chunks (
   chunk_index           INTEGER NOT NULL,
   chunk_text            TEXT    NOT NULL,
   chunk_source          TEXT    NOT NULL DEFAULT 'compiled_truth',
-  embedding             vector(1536),
+  embedding             vector(__EMBEDDING_DIMS__),
   model                 TEXT    NOT NULL DEFAULT 'text-embedding-3-large',
   token_count           INTEGER,
   embedded_at           TIMESTAMPTZ,
@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS config (
 INSERT INTO config (key, value) VALUES
   ('version', '1'),
   ('embedding_model', 'text-embedding-3-large'),
-  ('embedding_dimensions', '1536'),
+  ('embedding_dimensions', '__EMBEDDING_DIMS__'),
   ('chunk_strategy', 'semantic')
 ON CONFLICT (key) DO NOTHING;
 
