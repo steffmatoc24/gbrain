@@ -5,16 +5,17 @@ import { chunkText } from '../core/chunkers/recursive.ts';
 import { createProgress, type ProgressReporter } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { getEmbeddingDimensions } from '../core/ai/gateway.ts';
+import { getDimensionsForModel } from '../core/ai/embedding-registry.ts';
 
 /**
  * Pre-flight check: verify that the gateway's embedding dimension matches
  * the DB column dimension. A mismatch causes silent pgvector INSERT failures.
  */
 async function runEmbedPreflightCheck(engine: BrainEngine): Promise<void> {
-  const { configureGateway } = await import('../core/ai/gateway.ts');
-  const config = loadConfig();
-  configureGateway(config);
-  const gwDims = getEmbeddingDimensions();
+  const modelRow = await engine.getConfig('embedding_model');
+  const dimRow = await engine.getConfig('embedding_dimensions');
+  const model = modelRow ?? null;
+  const gwDims = dimRow ? parseInt(dimRow, 10) : (model ? getDimensionsForModel(model) : getEmbeddingDimensions());
   const { readContentChunksEmbeddingDim } = await import('../core/embedding-dim-check.ts');
   const colInfo = await readContentChunksEmbeddingDim(engine);
   if (!colInfo.exists || colInfo.dims === null) return;
